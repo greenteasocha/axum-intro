@@ -1,88 +1,21 @@
+mod handlers;
+mod repositories;
+
 use axum::{
     extract::Extension,
-    http::StatusCode,
-    response::IntoResponse,
+    // http::StatusCode,
+    // response::IntoResponse,
     routing::{get, post},
-    Json, Router,
+    // Json,
+    Router,
 };
-use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::{Arc, RwLock}};
 use std::env;
 use std::net::SocketAddr;
-use thiserror::Error;
+use std::sync::{Arc};
+// use thiserror::Error;
 
-#[derive(Debug, Error)]
-enum RepositoryError {
-    #[error("NotFound, id is {0}")]
-    NotFound(i32),
-}
-
-pub trait TaskRepository: Clone + std::marker::Send + std::marker::Sync + 'static {
-    fn create(&self, payload: CreateTaskPayload) -> Task;
-    fn find(&self, id: i32) -> Option<Task>; // findされないかも
-    fn all(&self) -> Vec<Task>; // array
-    fn update(&self, id: i32, payload: UpdateTaskPayload) -> anyhow::Result<Task>; // any
-    fn delete(&self, id: i32) -> anyhow::Result<()>; // anyhowは何？
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-pub struct CreateTaskPayload {
-    text: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-pub struct UpdateTaskPayload {
-    text: Option<String>,
-    completed: Option<bool>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Task {
-    id: i32,
-    text: String,
-    completed: bool,
-}
-
-impl Task {
-    pub fn new(id: i32, text: String) -> Self {
-        Self {
-            id, // id: id, と書かなくて良いらしい
-            text, // text: text, と書かなくて良いらしい
-            completed: false,
-        }
-    }
-}
-
-type TaskHashMap = HashMap<i32, Task>;
-
-#[derive(Debug, Clone)]
-pub struct TaskRepositoryForMemory {
-    store: Arc<RwLock<TaskHashMap>>,
-}
-
-impl TaskRepositoryForMemory {
-    pub fn new() -> Self {
-        TaskRepositoryForMemory { store: Arc::default() }
-    }
-}
-
-impl TaskRepository for TaskRepositoryForMemory {
-    fn create(&self, payload: CreateTaskPayload) -> Task {
-        todo!();
-    }
-    fn find(&self, id: i32) -> Option<Task> {
-        todo!();
-    }
-    fn all(&self) -> Vec<Task> {
-        todo!();
-    }
-    fn update(&self, id: i32, payload: UpdateTaskPayload) -> anyhow::Result<Task> {
-        todo!();
-    }
-    fn delete(&self, id: i32) -> anyhow::Result<()> {
-        todo!();
-    }
-}
+use handlers::create_task;
+use repositories::{TaskRepository, TaskRepositoryForMemory};
 
 #[tokio::main]
 async fn main() {
@@ -104,79 +37,74 @@ async fn main() {
         .unwrap()
 }
 
-fn create_app<T: TaskRepository>(repositoroy: T) -> Router {
+fn create_app<T: TaskRepository>(repository: T) -> Router {
     return Router::new()
         .route("/", get(root))
-        .route("/users", post(create_user))
-        .layer(Extension(Arc::new(repositoroy)));
+        .route("/tasks", post(create_task::<T>))
+        .layer(Extension(Arc::new(repository)));
 }
 
 async fn root() -> &'static str {
     "Hello, World!"
 }
 
-async fn create_user(Json(payload): Json<CreateUser>) -> impl IntoResponse {
-    let user = User {
-        id: 1337,
-        name: payload.name,
-    };
+// #[derive(Deserialize)]
+// struct CreateUser {
+//     name: String,
+// }
 
-    (StatusCode::CREATED, Json(user))
-}
+// #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+// struct User {
+//     id: u32,
+//     name: String,
+// }
 
-#[derive(Deserialize)]
-struct CreateUser {
-    name: String,
-}
+// #[cfg(test)]
+// mod test {
+//     use super::*;
+//     use axum::{
+//         body::Body,
+//         http::{header, Method, Request},
+//     };
+//     use tower::ServiceExt;
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-struct User {
-    id: u32,
-    name: String,
-}
+//     #[tokio::test]
+//     async fn should_return_hello_world() {
+//         let req = Request::builder().uri("/").body(Body::empty()).unwrap();
 
-#[cfg(test)]
-mod test {
-    use super::*;
-    use axum::{
-        body::Body,
-        http::{header, Method, Request},
-    };
-    use tower::ServiceExt;
+//         let repository = TaskRepositoryForMemory::new();
+//         let res = create_app(repository).oneshot(req).await.unwrap();
 
-    #[tokio::test]
-    async fn should_return_hello_world() {
-        let req = Request::builder().uri("/").body(Body::empty()).unwrap();
-        let res = create_app().oneshot(req).await.unwrap();
+//         let bytes = hyper::body::to_bytes(res.into_body()).await.unwrap();
+//         let body: String = String::from_utf8(bytes.to_vec()).unwrap();
 
-        let bytes = hyper::body::to_bytes(res.into_body()).await.unwrap();
-        let body: String = String::from_utf8(bytes.to_vec()).unwrap();
+//         assert_eq!(body, "Hello, World!");
+//     }
 
-        assert_eq!(body, "Hello, World!");
-    }
+//     #[tokio::test]
+//     async fn should_return_user_data() {
+//         let req = Request::builder()
+//             .uri("/users")
+//             .method(Method::POST)
+//             // .header(header::CONTENT_TYPE, mime::APPLICATION_JSON) // TODO: こちらだと失敗
+//             .header("Content-Type", "application/json")
+//             .body(Body::from(r#"{ "name": "hoge" }"#))
+//             .unwrap();
 
-    #[tokio::test]
-    async fn should_return_user_data() {
-        let req = Request::builder()
-            .uri("/users")
-            .method(Method::POST)
-            // .header(header::CONTENT_TYPE, mime::APPLICATION_JSON) // TODO: こちらだと失敗
-            .header("Content-Type", "application/json")
-            .body(Body::from(r#"{ "name": "hoge" }"#))
-            .unwrap();
-        let res = create_app().oneshot(req).await.unwrap();
+//         let repository = TaskRepositoryForMemory::new();
+//         let res = create_app(repository).oneshot(req).await.unwrap();
 
-        let bytes = hyper::body::to_bytes(res.into_body()).await.unwrap();
-        let body = String::from_utf8(bytes.to_vec()).unwrap();
-        // let body = r#"{ "id": 1337, "name": "hoge" }"#;
-        let user: User = serde_json::from_str(&body).expect("cannot convert user instance");
+//         let bytes = hyper::body::to_bytes(res.into_body()).await.unwrap();
+//         let body = String::from_utf8(bytes.to_vec()).unwrap();
+//         // let body = r#"{ "id": 1337, "name": "hoge" }"#;
+//         let user: User = serde_json::from_str(&body).expect("cannot convert user instance");
 
-        assert_eq!(
-            user,
-            User {
-                id: 1337,
-                name: "hoge".to_string()
-            }
-        );
-    }
-}
+//         assert_eq!(
+//             user,
+//             User {
+//                 id: 1337,
+//                 name: "hoge".to_string()
+//             }
+//         );
+//     }
+// }
