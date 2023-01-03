@@ -1,4 +1,4 @@
-.PHONY: run run-debug watch watch-debug build fmt
+.PHONY: run run-debug watch watch-debug build fmt migrate
 
 run:
 	 cargo run
@@ -17,3 +17,7 @@ build:
 
 fmt:
 	cargo fmt
+
+migrate: 
+	sqlx migrate run --database-url postgres://admin:admin@127.0.0.1:35432/postgres --source ./db/migrations
+
