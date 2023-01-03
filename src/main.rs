@@ -9,13 +9,15 @@ use axum::{
     // Json,
     Router,
 };
+use dotenv::dotenv;
+use sqlx::PgPool;
 use std::env;
 use std::net::SocketAddr;
-use std::sync::{Arc};
+use std::sync::Arc;
 // use thiserror::Error;
 
-use handlers::create_task;
-use repositories::{TaskRepository, TaskRepositoryForMemory};
+use handlers::{create_task, find_all_tasks, find_task, root};
+use repositories::{TaskRepository, TaskRepositoryForDb, TaskRepositoryForMemory};
 
 #[tokio::main]
 async fn main() {
@@ -24,8 +26,19 @@ async fn main() {
     env::set_var("RUST_LOG", log_level);
     tracing_subscriber::fmt::init();
 
+    // .env
+    dotenv().ok();
+
+    // connect DB
+    let database_url = &env::var("DATABASE_URL").expect("undefined: [DATABASE_URL]");
+    tracing::debug!("Connecting database...");
+    let pool = PgPool::connect(database_url).await.expect(&format!(
+        "Fail to connect database. ur;: [{}]",
+        database_url
+    ));
+    let repository = TaskRepositoryForDb::new(pool);
+
     // route setting
-    let repository = TaskRepositoryForMemory::new();
     let app = create_app(repository);
     let addr = SocketAddr::from(([127, 0, 0, 1], 3333));
 
@@ -40,12 +53,10 @@ async fn main() {
 fn create_app<T: TaskRepository>(repository: T) -> Router {
     return Router::new()
         .route("/", get(root))
+        .route("/tasks/:id", get(find_task::<T>))
+        .route("/tasks", get(find_all_tasks::<T>))
         .route("/tasks", post(create_task::<T>))
         .layer(Extension(Arc::new(repository)));
-}
-
-async fn root() -> &'static str {
-    "Hello, World!"
 }
 
 // #[derive(Deserialize)]
