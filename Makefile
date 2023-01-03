@@ -1,4 +1,4 @@
-.PHONY: run run-debug watch watch-debug build fmt migrate
+.PHONY: run run-debug watch watch-debug build fmt migrate migrate_test test
 
 run:
 	 cargo run
@@ -21,3 +21,8 @@ fmt:
 migrate: 
 	sqlx migrate run --database-url postgres://admin:admin@127.0.0.1:35432/postgres --source ./db/migrations
 
+migrate_test:
+	sqlx migrate run --database-url postgres://admin:admin@127.0.0.1:35432/postgres_test --source ./db/migrations
+
+test:
+	cargo test
