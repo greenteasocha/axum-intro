@@ -1,15 +1,10 @@
-use axum::{async_trait, Json};
+use axum::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::to_string;
 use sqlx::PgPool;
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-enum RepositoryError {
+pub enum RepositoryError {
     #[error("Unexpexted Error: [{0}]")]
     Unexpexted(String),
     #[error("NotFound, id is {0}")]
@@ -33,15 +28,13 @@ impl Task {
     }
 }
 
-type TaskHashMap = HashMap<i32, Task>;
-
 #[async_trait]
 pub trait TaskRepository: Clone + std::marker::Send + std::marker::Sync + 'static {
-    async fn create(&self, payload: CreateTaskPayload) -> Option<Task>;
-    async fn find(&self, id: i32) -> Option<Task>; // findされないかも
-    async fn all(&self) -> Vec<Task>; // array
-    async fn update(&self, id: i32, payload: UpdateTaskPayload) -> anyhow::Result<Task>; // any
-    async fn delete(&self, id: i32) -> anyhow::Result<()>; // anyhowは何？
+    async fn create(&self, payload: CreateTaskPayload) -> anyhow::Result<Task>;
+    async fn find(&self, id: i32) -> anyhow::Result<Task>; // findされないかも
+    async fn all(&self) -> anyhow::Result<Vec<Task>>; // array
+    async fn update(&self, id: i32, payload: UpdateTaskPayload) -> anyhow::Result<Task>;
+    async fn delete(&self, id: i32) -> anyhow::Result<(), RepositoryError>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -68,8 +61,7 @@ impl TaskRepositoryForDb {
 
 #[async_trait]
 impl TaskRepository for TaskRepositoryForDb {
-    async fn create(&self, payload: CreateTaskPayload) -> Option<Task> {
-        tracing::debug!("create");
+    async fn create(&self, payload: CreateTaskPayload) -> anyhow::Result<Task> {
         let task = sqlx::query_as::<_, Task>(
             r#"
             INSERT INTO tasks (text, completed) values ($1, false) returning *
@@ -78,61 +70,142 @@ impl TaskRepository for TaskRepositoryForDb {
         .bind(payload.text)
         .fetch_one(&self.pool)
         .await
-        .ok()?;
-        tracing::debug!("finding id: {}", serde_json::to_string(&task).unwrap());
-        Some(task)
+        .expect("Failed to create task");
+
+        Ok(task)
     }
-    async fn find(&self, id: i32) -> Option<Task> {
-        tracing::debug!("finding id: {}", id);
+    async fn find(&self, id: i32) -> anyhow::Result<Task> {
         // FIXME: なぜかbindか効かないのでクエリに直書きしている。とりあえずDBからデータ取れることだけ確認。
         let task = sqlx::query_as::<_, Task>(
-            "SELECT * FROM tasks where id = 1 limit 1", // "SELECT * FROM tasks where id = ? limit 1"
+            "SELECT * FROM tasks where id = $1 limit 1", // "SELECT * FROM tasks where id = ? limit 1"
         )
-        // .bind(1) // ???
+        .bind(id)
         .fetch_one(&self.pool)
         .await
-        .ok()?;
-        Some(task)
+        .expect("Specified Task not found");
+
+        Ok(task)
     }
-    async fn all(&self) -> Vec<Task> {
-        todo!();
+    async fn all(&self) -> anyhow::Result<Vec<Task>> {
+        let tasks = sqlx::query_as::<_, Task>(
+            r#"
+            SELECT * FROM tasks
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .expect("Failed to find tasks");
+
+        Ok(tasks)
     }
     async fn update(&self, id: i32, payload: UpdateTaskPayload) -> anyhow::Result<Task> {
-        todo!();
+        let task = sqlx::query_as::<_, Task>(
+            r#"
+            update tasks set text = $1, completed = $2 where id = $3 returning *;
+            "#,
+        )
+        .bind(payload.text.unwrap())
+        .bind(payload.completed.unwrap())
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await
+        .expect("Failed to update task");
+
+        Ok(task)
     }
-    async fn delete(&self, id: i32) -> anyhow::Result<()> {
-        todo!();
+    async fn delete(&self, id: i32) -> anyhow::Result<(), RepositoryError> {
+        sqlx::query(
+            r#"
+            delete from tasks where id = $1 ;
+            "#,
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::RowNotFound => RepositoryError::NotFound(id),
+            _ => RepositoryError::Unexpexted(e.to_string()),
+        })
+        .ok();
+
+        Ok(())
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct TaskRepositoryForMemory {
-    store: Arc<RwLock<TaskHashMap>>,
-}
+#[cfg(test)]
+mod test {
+    use super::*;
+    use dotenv::dotenv;
+    use sqlx::PgPool;
+    use std::env;
 
-impl TaskRepositoryForMemory {
-    pub fn new() -> Self {
-        TaskRepositoryForMemory {
-            store: Arc::default(),
-        }
-    }
-}
+    #[tokio::test]
+    async fn scenario() {
+        dotenv().ok();
 
-#[async_trait]
-impl TaskRepository for TaskRepositoryForMemory {
-    async fn create(&self, payload: CreateTaskPayload) -> Option<Task> {
-        todo!();
-    }
-    async fn find(&self, id: i32) -> Option<Task> {
-        todo!();
-    }
-    async fn all(&self) -> Vec<Task> {
-        todo!();
-    }
-    async fn update(&self, id: i32, payload: UpdateTaskPayload) -> anyhow::Result<Task> {
-        todo!();
-    }
-    async fn delete(&self, id: i32) -> anyhow::Result<()> {
-        todo!();
+        // connect DB
+        let database_url = &env::var("TEST_DATABASE_URL").expect("undefined: [TEST_DATABASE_URL]");
+        tracing::debug!("Connecting database...");
+        let pool = PgPool::connect(database_url).await.expect(&format!(
+            "Fail to connect database. url: [{}]",
+            database_url
+        ));
+
+        // refresh database
+        sqlx::query("Delete from tasks")
+            .execute(&pool)
+            .await
+            .expect("[Refresh database] failed");
+        // transactionを貼ったりしていないので並列でテストが走っていると危険な感じがするので、テスト側をベタ書きidに依存しない形に変更
+        // CI毎にtest DBのidが膨れ上がっていくのでこれはこれで気になる
+        // sqlx::query("ALTER SEQUENCE tasks_id_seq RESTART WITH 1").execute(&pool).await.expect("[Refresh database] failed");
+
+        // initialize repository
+        let repository = TaskRepositoryForDb::new(pool);
+        let text = "test_task";
+
+        // create
+        let create_payload: CreateTaskPayload = CreateTaskPayload {
+            text: text.to_string(),
+        };
+        let created = repository
+            .create(create_payload)
+            .await
+            .expect("[create] failed.");
+        assert_eq!(text, created.text);
+        assert!(!created.completed);
+
+        // find one
+        let task = repository
+            .find(created.id)
+            .await
+            .expect("[find one] failed.");
+        assert_eq!(text, task.text);
+
+        // find all
+        let tasks = repository.all().await.expect("[all] failed.");
+        assert_eq!(1, tasks.len());
+        assert_eq!(created, *tasks.first().unwrap());
+
+        // update
+        let updated_text = "Successfully updated.";
+        let update_payload: UpdateTaskPayload = UpdateTaskPayload {
+            text: Some(updated_text.to_string()),
+            completed: Some(false),
+        };
+        let updated = repository
+            .update(created.id, update_payload)
+            .await
+            .expect("[update] failed.");
+        assert_eq!(updated_text, updated.text);
+        assert!(!updated.completed);
+
+        // delete
+        repository
+            .delete(created.id)
+            .await
+            .expect("[delete] failed.");
+        let tasks = repository.all().await.expect("[all] failed.");
+        assert_eq!(0, tasks.len());
     }
 }

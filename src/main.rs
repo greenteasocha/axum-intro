@@ -5,7 +5,7 @@ use axum::{
     extract::Extension,
     // http::StatusCode,
     // response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, patch, post},
     // Json,
     Router,
 };
@@ -16,8 +16,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 // use thiserror::Error;
 
-use handlers::{create_task, find_all_tasks, find_task, root};
-use repositories::{TaskRepository, TaskRepositoryForDb, TaskRepositoryForMemory};
+use handlers::{create_task, delete_task, find_all_tasks, find_task, root, update_task};
+use repositories::{TaskRepository, TaskRepositoryForDb};
 
 #[tokio::main]
 async fn main() {
@@ -33,7 +33,7 @@ async fn main() {
     let database_url = &env::var("DATABASE_URL").expect("undefined: [DATABASE_URL]");
     tracing::debug!("Connecting database...");
     let pool = PgPool::connect(database_url).await.expect(&format!(
-        "Fail to connect database. ur;: [{}]",
+        "Fail to connect database. url: [{}]",
         database_url
     ));
     let repository = TaskRepositoryForDb::new(pool);
@@ -56,6 +56,8 @@ fn create_app<T: TaskRepository>(repository: T) -> Router {
         .route("/tasks/:id", get(find_task::<T>))
         .route("/tasks", get(find_all_tasks::<T>))
         .route("/tasks", post(create_task::<T>))
+        .route("/tasks/:id", patch(update_task::<T>))
+        .route("/tasks/:id", delete(delete_task::<T>))
         .layer(Extension(Arc::new(repository)));
 }
 
